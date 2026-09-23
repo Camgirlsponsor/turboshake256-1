@@ -3,5 +3,7 @@ __pycache__/
 .venv/
 /dfpowd
 /chain.json
+/wallet.json
+wallet.json
 *.tmp
 /gpu/dfpow-gpu

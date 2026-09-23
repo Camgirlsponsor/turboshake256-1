@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DFPoW prototype</title>
+  <title>DFPoW explorer</title>
   <style>
     :root {
       color-scheme: light;
@@ -21,90 +21,146 @@
       background: var(--paper);
       color: var(--ink);
     }
-    main { max-width: 920px; margin: 0 auto; padding: 32px 20px 64px; }
-    h1 { font-size: 2rem; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.03em; }
-    p { line-height: 1.45; }
-    .lede { color: var(--muted); max-width: 62ch; }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px;
-      margin: 24px 0;
-    }
-    .stat {
-      background: var(--card);
-      border: 1px solid var(--line);
-      padding: 12px 14px;
-    }
-    .stat b { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
-    .stat span { color: var(--muted); font-size: 0.85rem; }
-    form {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    input, button {
+    header, main { max-width: 980px; margin: 0 auto; padding: 20px 20px 0; }
+    main { padding-bottom: 64px; }
+    h1 { font-size: 1.8rem; margin: 0; letter-spacing: -0.03em; }
+    h2 { font-size: 1.15rem; margin: 0 0 8px; }
+    a { color: var(--accent); }
+    nav { display: flex; gap: 14px; margin: 10px 0; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+    input, button, select {
       font: inherit;
       font-size: 1rem;
       padding: 8px 12px;
     }
-    input { border: 1px solid var(--line); background: white; min-width: 180px; }
-    button {
-      background: var(--accent);
-      color: white;
-      border: 0;
-      cursor: pointer;
-    }
+    input, select { border: 1px solid var(--line); background: white; }
+    input[type="search"], input.wide { min-width: min(100%, 280px); flex: 1; }
+    button { background: var(--accent); color: white; border: 0; cursor: pointer; }
+    button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.6; cursor: wait; }
-    #status { min-height: 1.4em; color: var(--muted); }
-    article {
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .stat, article, .card {
       background: var(--card);
       border: 1px solid var(--line);
-      padding: 14px 16px;
-      margin-top: 12px;
+      padding: 12px 14px;
     }
-    article h2 { margin: 0 0 8px; font-size: 1.1rem; }
-    dl { display: grid; grid-template-columns: 9rem 1fr; gap: 4px 12px; margin: 0; }
+    .stat b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .stat span, .muted { color: var(--muted); }
+    article, .card { margin-top: 12px; }
+    dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: 4px 12px; margin: 0; }
     dt { color: var(--muted); }
-    dd { margin: 0; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.82rem; overflow-wrap: anywhere; }
-    .ops { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+    dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
+    #status { min-height: 1.4em; color: var(--muted); }
   </style>
 </head>
 <body>
-  <main>
-    <h1>DFPoW prototype</h1>
-    <p class="lede">A local chain. Each nonce builds a different 256-round program, then the block is kept only if that program's digest meets the difficulty target. No wallets, no peers, no signatures.</p>
-    <section class="stats" id="stats"></section>
-    <form id="mine">
-      <input id="note" name="note" value="local" maxlength="64" aria-label="Miner name">
-      <button type="submit" id="go">Mine one block</button>
+  <header>
+    <h1>DFPoW</h1>
+    <p class="muted">Proof-of-work blocks, signed payments, and any node that has more work.</p>
+    <nav>
+      <a href="#/">Chain</a>
+      <a href="#/wallet">Wallet</a>
+      <a href="#/mempool">Mempool</a>
+    </nav>
+    <form id="search">
+      <input id="q" type="search" placeholder="Height, block, transaction, or address" aria-label="Search">
+      <button type="submit">Look up</button>
     </form>
+  </header>
+  <main>
+    <section class="stats" id="stats"></section>
     <p id="status"></p>
-    <div id="blocks"></div>
+    <div id="view"></div>
   </main>
   <script>
-    const stats = document.querySelector("#stats");
-    const blocks = document.querySelector("#blocks");
-    const status = document.querySelector("#status");
-    const button = document.querySelector("#go");
+    const COIN = 100000000n;
+    const statsEl = document.querySelector("#stats");
+    const viewEl = document.querySelector("#view");
+    const statusEl = document.querySelector("#status");
+    let chain = null;
+    let wallet = null;
 
-    function field(label, value) {
+    function coins(atoms) {
+      const n = BigInt(atoms);
+      const whole = n / COIN;
+      let frac = (n % COIN).toString().padStart(8, "0").replace(/0+$/, "");
+      return frac ? whole + "." + frac : whole.toString();
+    }
+
+    function parseCoins(text) {
+      const s = text.trim();
+      if (!/^\d+(\.\d{1,8})?$/.test(s)) throw new Error("Enter an amount like 1.5");
+      const parts = s.split(".");
+      const frac = (parts[1] || "").padEnd(8, "0");
+      return Number(BigInt(parts[0]) * COIN + BigInt(frac));
+    }
+
+    function short(hex) {
+      if (!hex) return "";
+      if (hex.length <= 18) return hex;
+      return hex.slice(0, 8) + "…" + hex.slice(-6);
+    }
+
+    function parentLink(parent, full) {
+      if (/^0+$/.test(parent || "")) return document.createTextNode("genesis");
+      return link("#/block/" + parent, full ? parent : short(parent), parent);
+    }
+
+    function link(hash, text, title) {
+      const a = document.createElement("a");
+      a.href = hash;
+      a.textContent = text;
+      if (title) a.title = title;
+      return a;
+    }
+
+    function field(label, node) {
       const dt = document.createElement("dt");
       dt.textContent = label;
       const dd = document.createElement("dd");
-      dd.textContent = value;
+      if (typeof node === "string") dd.textContent = node;
+      else dd.append(node);
       return [dt, dd];
     }
 
-    function render(chain) {
-      stats.replaceChildren();
+    function card(title) {
+      const article = document.createElement("article");
+      const h2 = document.createElement("h2");
+      h2.textContent = title;
+      article.append(h2);
+      return article;
+    }
+
+    async function load() {
+      const [chainRes, walletRes] = await Promise.all([fetch("/api/chain"), fetch("/api/wallet")]);
+      if (!chainRes.ok) throw new Error(await chainRes.text());
+      if (!walletRes.ok) throw new Error(await walletRes.text());
+      chain = await chainRes.json();
+      wallet = await walletRes.json();
+      renderStats();
+      const typing = document.activeElement && document.activeElement.closest("#view form");
+      if (!typing) render();
+    }
+
+    function renderStats() {
+      statsEl.replaceChildren();
+      const mem = (chain.mempool || []).length;
       const items = [
-        ["Height", chain.height],
+        ["Height", String(chain.height)],
         ["Work", chain.work],
-        ["Next difficulty", chain.next_difficulty],
-        ["Epoch length", chain.epoch_length + " blocks"],
+        ["Supply", coins(chain.supply)],
+        ["Next difficulty", String(chain.next_difficulty)],
+        ["Mempool", String(mem)],
+        ["Peers", String((chain.peers || []).length)],
       ];
       for (const [label, value] of items) {
         const box = document.createElement("div");
@@ -114,59 +170,372 @@
         const s = document.createElement("span");
         s.textContent = label;
         box.append(b, s);
-        stats.append(box);
+        statsEl.append(box);
       }
-      blocks.replaceChildren();
-      for (const block of chain.blocks) {
-        const article = document.createElement("article");
-        const h2 = document.createElement("h2");
-        h2.textContent = "Block " + block.height + "  ·  " + block.note;
-        const dl = document.createElement("dl");
-        const rows = [
-          ["Hash", block.hash],
-          ["Parent", block.parent],
-          ["Difficulty", String(block.difficulty) + "   work 2^" + block.difficulty],
-          ["Nonce", block.nonce],
-          ["Time", new Date(block.timestamp * 1000).toISOString().replace(".000Z", "Z")],
-          ["Epoch seed", block.epoch_seed],
-          ["Program", block.schedule.join("  ")],
-        ];
-        for (const [label, value] of rows) {
-          dl.append(...field(label, value));
+    }
+
+    function route() {
+      const raw = (location.hash || "#/").replace(/^#/, "");
+      const parts = raw.split("/").filter(Boolean);
+      return { name: parts[0] || "chain", id: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+
+    function render() {
+      const { name, id } = route();
+      if (name === "wallet") return renderWallet();
+      if (name === "mempool") return renderMempool();
+      if (name === "block" && id) return renderBlock(id);
+      if (name === "tx" && id) return renderTx(id);
+      if (name === "address" && id) return renderAddress(id);
+      if (name === "lookup" && id) return renderLookup(id);
+      renderChain();
+    }
+
+    function renderChain() {
+      viewEl.replaceChildren();
+      const form = document.createElement("form");
+      form.id = "mine";
+      const note = document.createElement("input");
+      note.id = "note";
+      note.value = "local";
+      note.maxLength = 64;
+      note.setAttribute("aria-label", "Coinbase note");
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.id = "mine-go";
+      button.textContent = "Mine one block";
+      form.append(note, button);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        statusEl.textContent = "Searching nonces…";
+        try {
+          const response = await fetch("/api/mine", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ note: note.value }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || "mine failed");
+          statusEl.textContent = "Block " + body.block.height + " found after " + body.attempts + " hashes in " + body.elapsed_ms + " ms.";
+          await load();
+          render();
+        } catch (err) {
+          statusEl.textContent = err.message;
+        } finally {
+          button.disabled = false;
         }
-        article.append(h2, dl);
-        blocks.append(article);
+      });
+      viewEl.append(form);
+
+      if ((chain.peers || []).length) {
+        const peers = card("Peers");
+        const list = document.createElement("ul");
+        for (const peer of chain.peers) {
+          const li = document.createElement("li");
+          li.textContent = peer.addr + (peer.error ? " — " + peer.error : " — height " + (peer.height ?? ""));
+          list.append(li);
+        }
+        peers.append(list);
+        viewEl.append(peers);
+      }
+
+      for (const block of chain.blocks) {
+        const article = card("Block " + block.height + " · " + block.note);
+        const dl = document.createElement("dl");
+        dl.append(
+          ...field("Hash", link("#/block/" + block.hash, short(block.hash), block.hash)),
+          ...field("Parent", parentLink(block.parent)),
+          ...field("Miner", link("#/address/" + block.miner, short(block.miner), block.miner)),
+          ...field("Difficulty", String(block.difficulty) + "   work 2^" + block.difficulty),
+          ...field("Nonce", String(block.nonce)),
+          ...field("Time", new Date(block.timestamp * 1000).toISOString().replace(".000Z", "Z")),
+          ...field("Transactions", String(block.transactions.length)),
+          ...field("Program", block.schedule.join("  ")),
+        );
+        article.append(dl);
+        viewEl.append(article);
       }
     }
 
-    async function load() {
-      const response = await fetch("/api/chain");
-      if (!response.ok) throw new Error(await response.text());
-      render(await response.json());
+    function renderWallet() {
+      viewEl.replaceChildren();
+      const create = document.createElement("button");
+      create.type = "button";
+      create.className = "quiet";
+      create.textContent = "New address";
+      create.addEventListener("click", async () => {
+        create.disabled = true;
+        try {
+          const response = await fetch("/api/wallet/new", { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || "could not create an address");
+          statusEl.textContent = "Address " + body.address + " is in this wallet.";
+          await load();
+          renderWallet();
+        } catch (err) {
+          statusEl.textContent = err.message;
+        } finally {
+          create.disabled = false;
+        }
+      });
+      viewEl.append(create);
+
+      const list = card("Addresses");
+      const table = document.createElement("table");
+      const head = document.createElement("tr");
+      for (const label of ["Label", "Address", "Balance"]) {
+        const th = document.createElement("th");
+        th.textContent = label;
+        head.append(th);
+      }
+      table.append(head);
+      for (const addr of wallet.addresses) {
+        const tr = document.createElement("tr");
+        const label = document.createElement("td");
+        label.textContent = addr.label;
+        const address = document.createElement("td");
+        address.append(link("#/address/" + addr.address, short(addr.address), addr.address));
+        const balance = document.createElement("td");
+        balance.textContent = coins(addr.balance);
+        tr.append(label, address, balance);
+        table.append(tr);
+      }
+      list.append(table);
+      viewEl.append(list);
+
+      const form = document.createElement("form");
+      const from = document.createElement("select");
+      from.setAttribute("aria-label", "From");
+      for (const addr of wallet.addresses) {
+        const option = document.createElement("option");
+        option.value = addr.address;
+        option.textContent = addr.label + " · " + coins(addr.balance);
+        from.append(option);
+      }
+      const to = document.createElement("input");
+      to.placeholder = "Recipient address";
+      to.required = true;
+      to.className = "wide";
+      to.setAttribute("aria-label", "Recipient");
+      const amount = document.createElement("input");
+      amount.placeholder = "Amount";
+      amount.value = "1";
+      amount.required = true;
+      amount.setAttribute("aria-label", "Amount in coins");
+      const fee = document.createElement("input");
+      fee.placeholder = "Fee";
+      fee.value = "0";
+      fee.setAttribute("aria-label", "Fee in coins");
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.textContent = "Send";
+      form.append(from, to, amount, fee, button);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        try {
+          const response = await fetch("/api/send", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              from: from.value,
+              to: to.value.trim(),
+              amount: parseCoins(amount.value),
+              fee: parseCoins(fee.value || "0"),
+            }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || "send failed");
+          statusEl.textContent = "Transaction submitted. Mine a block to confirm it.";
+          location.hash = "#/tx/" + body.transaction.id;
+          await load();
+          render();
+        } catch (err) {
+          statusEl.textContent = err.message;
+        } finally {
+          button.disabled = false;
+        }
+      });
+      const sendCard = card("Send");
+      const hint = document.createElement("p");
+      hint.className = "muted";
+      hint.textContent = "Amounts are in coins. 1 coin = 100000000 units. The fee is paid to the miner of the block that confirms this payment.";
+      sendCard.append(hint, form);
+      viewEl.append(sendCard);
     }
 
-    document.querySelector("#mine").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      button.disabled = true;
-      status.textContent = "Searching nonces…";
+    function txRow(tx) {
+      const tr = document.createElement("tr");
+      const kind = document.createElement("td");
+      kind.textContent = tx.kind;
+      const id = document.createElement("td");
+      id.append(link("#/tx/" + tx.id, short(tx.id), tx.id));
+      const parties = document.createElement("td");
+      parties.append(link("#/address/" + tx.from, short(tx.from), tx.from));
+      if (tx.to) {
+        parties.append(document.createTextNode(" → "));
+        parties.append(link("#/address/" + tx.to, short(tx.to), tx.to));
+      }
+      const amount = document.createElement("td");
+      amount.textContent = coins(tx.amount) + (tx.fee ? " + fee " + coins(tx.fee) : "");
+      const state = document.createElement("td");
+      state.textContent = tx.confirmed ? "block " + tx.height : "pending";
+      tr.append(kind, id, parties, amount, state);
+      return tr;
+    }
+
+    function txTable(txs) {
+      const table = document.createElement("table");
+      const head = document.createElement("tr");
+      for (const label of ["Kind", "Transaction", "Parties", "Amount", "State"]) {
+        const th = document.createElement("th");
+        th.textContent = label;
+        head.append(th);
+      }
+      table.append(head);
+      for (const tx of txs) table.append(txRow(tx));
+      return table;
+    }
+
+    function renderMempool() {
+      viewEl.replaceChildren();
+      const article = card("Mempool");
+      const txs = chain.mempool || [];
+      if (!txs.length) {
+        const p = document.createElement("p");
+        p.textContent = "No pending payments.";
+        article.append(p);
+      } else {
+        article.append(txTable(txs));
+      }
+      viewEl.append(article);
+    }
+
+    function findBlock(id) {
+      return chain.blocks.find((block) => block.hash === id || String(block.height) === id);
+    }
+
+    function renderBlock(id) {
+      const block = findBlock(id);
+      viewEl.replaceChildren();
+      if (!block) {
+        viewEl.append(card("Block not on this node"));
+        return;
+      }
+      const article = card("Block " + block.height);
+      const dl = document.createElement("dl");
+      dl.append(
+        ...field("Hash", block.hash),
+        ...field("Parent", parentLink(block.parent, true)),
+        ...field("Merkle", block.merkle),
+        ...field("Miner", link("#/address/" + block.miner, block.miner)),
+        ...field("Note", block.note),
+        ...field("Subsidy", coins(block.subsidy)),
+        ...field("Difficulty", String(block.difficulty)),
+        ...field("Nonce", String(block.nonce)),
+        ...field("Time", new Date(block.timestamp * 1000).toISOString().replace(".000Z", "Z")),
+        ...field("Program", block.schedule.join("  ")),
+      );
+      article.append(dl, txTable(block.transactions));
+      viewEl.append(article);
+    }
+
+    function renderTx(id) {
+      viewEl.replaceChildren();
+      let tx = null;
+      for (const block of chain.blocks) {
+        tx = block.transactions.find((item) => item.id === id);
+        if (tx) break;
+      }
+      if (!tx) tx = (chain.mempool || []).find((item) => item.id === id);
+      const article = card(tx ? tx.kind : "Transaction");
+      if (!tx) {
+        const p = document.createElement("p");
+        p.textContent = "Not on this node.";
+        article.append(p);
+        viewEl.append(article);
+        return;
+      }
+      const dl = document.createElement("dl");
+      const rows = [
+        ["Transaction", tx.id],
+        ["From", link("#/address/" + tx.from, tx.from)],
+      ];
+      if (tx.to) rows.push(["To", link("#/address/" + tx.to, tx.to)]);
+      rows.push(["Amount", coins(tx.amount)]);
+      rows.push(["Fee", coins(tx.fee || 0)]);
+      rows.push(["State", tx.confirmed ? "confirmed in block " + tx.height : "in the mempool"]);
+      if (tx.note) rows.push(["Note", tx.note]);
+      for (const [label, value] of rows) dl.append(...field(label, value));
+      article.append(dl);
+      viewEl.append(article);
+    }
+
+    async function renderAddress(id) {
+      viewEl.replaceChildren();
+      const article = card("Address");
+      viewEl.append(article);
       try {
-        const response = await fetch("/api/mine", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ note: document.querySelector("#note").value }),
-        });
+        const response = await fetch("/api/address/" + id);
         const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "mine failed");
-        status.textContent = "Block " + body.block.height + " found after " + body.attempts + " hashes in " + body.elapsed_ms + " ms.";
-        await load();
+        if (!response.ok) throw new Error(body.error || "address not found");
+        const dl = document.createElement("dl");
+        dl.append(
+          ...field("Address", body.address),
+          ...field("Balance", coins(body.balance)),
+          ...field("Next nonce", String(body.nonce)),
+        );
+        if (body.label) dl.append(...field("Label", body.label));
+        article.append(dl);
+        if (body.transactions.length) article.append(txTable(body.transactions));
+        else {
+          const p = document.createElement("p");
+          p.textContent = "No confirmed transactions.";
+          article.append(p);
+        }
       } catch (err) {
-        status.textContent = err.message;
-      } finally {
-        button.disabled = false;
+        article.append(document.createTextNode(err.message));
       }
+    }
+
+    async function renderLookup(id) {
+      if (findBlock(id)) {
+        location.hash = "#/block/" + id;
+        return;
+      }
+      const tx = (chain.mempool || []).find((item) => item.id === id);
+      if (tx) {
+        location.hash = "#/tx/" + id;
+        return;
+      }
+      for (const block of chain.blocks) {
+        if (block.transactions.some((item) => item.id === id)) {
+          location.hash = "#/tx/" + id;
+          return;
+        }
+      }
+      if (/^[0-9a-f]{64}$/.test(id)) {
+        location.hash = "#/address/" + id;
+        return;
+      }
+      viewEl.replaceChildren(card("Nothing matched " + id));
+    }
+
+    document.querySelector("#search").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const q = document.querySelector("#q").value.trim().toLowerCase();
+      if (!q) return;
+      if (/^\d+$/.test(q)) location.hash = "#/block/" + q;
+      else location.hash = "#/lookup/" + q;
+      render();
     });
 
-    load().catch((err) => { status.textContent = err.message; });
+    window.addEventListener("hashchange", () => { if (chain) render(); });
+    load().then(render).catch((err) => { statusEl.textContent = err.message; });
+    setInterval(() => {
+      load().catch((err) => { statusEl.textContent = err.message; });
+    }, 4000);
   </script>
 </body>
 </html>

@@ -132,4 +132,123 @@ func TestPersist(t *testing.T) {
 	if loaded.Tip().Hash != c.Tip().Hash || len(loaded.Blocks()) != 2 {
 		t.Fatal("reload mismatch")
 	}
+	if bal, _ := loaded.Balance(c.Payee()); bal != 2*Subsidy {
+		t.Fatalf("reloaded balance %d", bal)
+	}
+}
+
+func TestTransferUpdatesBalances(t *testing.T) {
+	anchor := uint32(1_700_000_000)
+	clock := anchor
+	c, err := New(func() uint32 { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	miner := c.Payee()
+	if bal, nonce := c.Balance(miner); bal != Subsidy || nonce != 0 {
+		t.Fatalf("genesis balance %d nonce %d", bal, nonce)
+	}
+	bob, _, err := NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := SignTransfer(c.SigningKey(), bob, Coin, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Submit(tx); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Mempool()) != 1 {
+		t.Fatal("mempool")
+	}
+	clock = anchor + 1
+	block, _, err := c.Mine("pay", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Txs) != 2 || block.Txs[1].ID != tx.ID {
+		t.Fatalf("block txs %d", len(block.Txs))
+	}
+	if bal, _ := c.Balance(bob); bal != Coin {
+		t.Fatalf("bob %d", bal)
+	}
+	if bal, nonce := c.Balance(miner); bal != 2*Subsidy-Coin || nonce != 1 {
+		t.Fatalf("miner balance %d nonce %d", bal, nonce)
+	}
+	if len(c.Mempool()) != 0 {
+		t.Fatal("mempool was not cleared")
+	}
+	if err := c.Submit(tx); err == nil {
+		t.Fatal("replayed transaction")
+	}
+	over, err := SignTransfer(c.SigningKey(), bob, 1000*Coin, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Submit(over); err == nil {
+		t.Fatal("overspend")
+	}
+	bad, err := SignTransfer(c.SigningKey(), bob, Coin, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.Signature[0] ^= 0xff
+	body := transferBody(bad.Pubkey, bad.Recipient, bad.Amount, bad.Fee, bad.Nonce)
+	bad.ID = txid(transferWire(body, bad.Signature))
+	if err := c.Submit(bad); err == nil {
+		t.Fatal("bad signature")
+	}
+}
+
+func TestHeavierChainReplacesTip(t *testing.T) {
+	anchor := uint32(1_700_000_000)
+	clock := anchor
+	local, err := New(func() uint32 { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := local.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := decode(raw, func() uint32 { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = anchor + 1
+	if _, _, err := other.Mine("a", 1); err != nil {
+		t.Fatal(err)
+	}
+	clock = anchor + 2
+	if _, _, err := other.Mine("b", 1); err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := local.Consider(mustBytes(t, other))
+	if err != nil || !adopted {
+		t.Fatalf("adopted %v %v", adopted, err)
+	}
+	if local.Tip().Hash != other.Tip().Hash || local.Work().Cmp(other.Work()) != 0 {
+		t.Fatal("tip did not follow the heavier chain")
+	}
+	short, err := decode(raw, func() uint32 { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err = local.Consider(mustBytes(t, short))
+	if err != nil || adopted {
+		t.Fatalf("shorter chain adopted %v %v", adopted, err)
+	}
+	if local.Tip().Hash != other.Tip().Hash {
+		t.Fatal("tip changed for less work")
+	}
+}
+
+func mustBytes(t *testing.T, c *Chain) []byte {
+	t.Helper()
+	raw, err := c.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

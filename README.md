@@ -26,8 +26,8 @@ This is not a claim of cryptographic security, and it is not an attempt to ban A
 | `python/dfpow.py` | Independent reference hasher |
 | `python/test_dfpow.py` | Vectors and structural checks |
 | `internal/dfpow` | Go hasher. It must match the Python vectors |
-| `internal/chain` | Single-node chain: coinbase, epoch seed, integer ASERT |
-| `cmd/dfpowd` | Miner and local block viewer |
+| `internal/chain` | Ledger: coinbase, signed transfers, balances, most-work chain |
+| `cmd/dfpowd` | Node, wallet, peer sync, and block explorer |
 | `gpu/` | OpenCL hasher, one nonce per work-item |
 
 ## Running the tests
@@ -41,7 +41,9 @@ The Python reference depends on the official BLAKE3 library (`blake3` 1.0.9). Dr
 
 ## Prototype node
 
-Go is the node. Python remains the check on the hasher. The prototype is one process: it mines into `chain.json` and can serve a page that shows each block's hash, difficulty, and the first eight accents of that nonce's program.
+Go is the node. Python remains the check on the hasher. A node mines into `chain.json`, keeps spendable keys in `wallet.json`, and serves an explorer.
+
+Payments are ed25519 transfers. The address is the public key. Each transfer carries a sequence number, an amount, and a fee. The coinbase pays the miner's address the subsidy plus the fees in that block. Balances are the result of replaying the chain. A node with more total work replaces the local chain.
 
 ```bash
 go test ./...
@@ -49,7 +51,16 @@ go run ./cmd/dfpowd mine -n 12
 go run ./cmd/dfpowd serve
 ```
 
-The viewer listens on `127.0.0.1:8080`. Epoch length is 8 blocks, the ideal interval is 4 seconds, and the ASERT half-life is 16 seconds, so difficulty moves during a short session. Those are prototype settings. The write-up's recommended epoch for a longer-lived chain is 128 blocks. Coinbase payments are labeled names, not signatures, and nothing is broadcast to a peer.
+The explorer listens on `127.0.0.1:8080`. It shows blocks, transactions, and addresses, and the wallet on that page can create an address and send coins. Mine a block to confirm a payment.
+
+A second node with an empty data directory joins the first chain instead of mining a rival genesis:
+
+```bash
+go run ./cmd/dfpowd serve -addr 127.0.0.1:8080 -data /tmp/dfpow-a/chain.json -wallet /tmp/dfpow-a/wallet.json
+go run ./cmd/dfpowd serve -addr 127.0.0.1:8081 -data /tmp/dfpow-b/chain.json -wallet /tmp/dfpow-b/wallet.json -peer 127.0.0.1:8080
+```
+
+Blocks and transactions are pushed to peers, and each node also asks its peers for a heavier chain every two seconds. Epoch length is 8 blocks, the ideal interval is 4 seconds, and the ASERT half-life is 16 seconds, so difficulty moves during a short session. Those are prototype settings. The write-up's recommended epoch for a longer-lived chain is 128 blocks. There is no authentication on the peer port; keep it on localhost unless you mean to share the chain.
 
 ## Hashing on a GPU
 
