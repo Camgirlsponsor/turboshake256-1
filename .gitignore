@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+/dfpowd
+/chain.json
+*.tmp
+/gpu/dfpow-gpu
