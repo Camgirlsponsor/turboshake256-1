@@ -28,6 +28,7 @@ This is not a claim of cryptographic security, and it is not an attempt to ban A
 | `internal/dfpow` | Go hasher. It must match the Python vectors |
 | `internal/chain` | Single-node chain: coinbase, epoch seed, integer ASERT |
 | `cmd/dfpowd` | Miner and local block viewer |
+| `gpu/` | OpenCL hasher, one nonce per work-item |
 
 ## Running the tests
 
@@ -49,3 +50,17 @@ go run ./cmd/dfpowd serve
 ```
 
 The viewer listens on `127.0.0.1:8080`. Epoch length is 8 blocks, the ideal interval is 4 seconds, and the ASERT half-life is 16 seconds, so difficulty moves during a short session. Those are prototype settings. The write-up's recommended epoch for a longer-lived chain is 128 blocks. Coinbase payments are labeled names, not signatures, and nothing is broadcast to a peer.
+
+## Hashing on a GPU
+
+`gpu/dfpow-gpu` is the same draft in OpenCL C. The host builds the 1 MiB epoch dataset once and uploads it. The kernel `dfpow_batch` gives each work-item one nonce: BLAKE3 seed, 3,551-byte program tape, 256 rounds, private scratchpad, BLAKE3 finalizer. The difficulty word stays in the 76-byte prefix; the nonce is not written back over it.
+
+The host binary includes that source and checks it against the draft vectors before launching the kernel. A GPU is used when the OpenCL platform has one. Otherwise the same kernel runs on a CPU device (pocl is enough).
+
+```bash
+sudo apt install ocl-icd-opencl-dev pocl-opencl-icd
+cd gpu && make test
+./dfpow-gpu bench 1024
+```
+
+`make test` runs the host vectors and a short OpenCL batch. Nonce 1000 must still digest to `747c88f9f23c23a9636cfdc88e452c99e804905acd587a2b7e9bfcb3e7850640`. The scratchpad and the tape are private to each work-item, so a GPU will spill them and occupancy will be modest. This is a correct parallel hasher, not a tuned miner, and it does not change the draft's hardware conclusion: a purpose-built chip can still implement the same datapath.

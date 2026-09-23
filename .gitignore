@@ -4,3 +4,4 @@ __pycache__/
 /dfpowd
 /chain.json
 *.tmp
+/gpu/dfpow-gpu
