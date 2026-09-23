@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DFPoW prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #5c564c;
+      --line: #d9d1c3;
+      --paper: #f6f1e8;
+      --card: #fffdf8;
+      --accent: #8a3e16;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 920px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 2rem; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.03em; }
+    p { line-height: 1.45; }
+    .lede { color: var(--muted); max-width: 62ch; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 24px 0;
+    }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+    .stat b { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 0.85rem; }
+    form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    input, button {
+      font: inherit;
+      font-size: 1rem;
+      padding: 8px 12px;
+    }
+    input { border: 1px solid var(--line); background: white; min-width: 180px; }
+    button {
+      background: var(--accent);
+      color: white;
+      border: 0;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    #status { min-height: 1.4em; color: var(--muted); }
+    article {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 14px 16px;
+      margin-top: 12px;
+    }
+    article h2 { margin: 0 0 8px; font-size: 1.1rem; }
+    dl { display: grid; grid-template-columns: 9rem 1fr; gap: 4px 12px; margin: 0; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.82rem; overflow-wrap: anywhere; }
+    .ops { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DFPoW prototype</h1>
+    <p class="lede">A local chain. Each nonce builds a different 256-round program, then the block is kept only if that program's digest meets the difficulty target. No wallets, no peers, no signatures.</p>
+    <section class="stats" id="stats"></section>
+    <form id="mine">
+      <input id="note" name="note" value="local" maxlength="64" aria-label="Miner name">
+      <button type="submit" id="go">Mine one block</button>
+    </form>
+    <p id="status"></p>
+    <div id="blocks"></div>
+  </main>
+  <script>
+    const stats = document.querySelector("#stats");
+    const blocks = document.querySelector("#blocks");
+    const status = document.querySelector("#status");
+    const button = document.querySelector("#go");
+
+    function field(label, value) {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      return [dt, dd];
+    }
+
+    function render(chain) {
+      stats.replaceChildren();
+      const items = [
+        ["Height", chain.height],
+        ["Work", chain.work],
+        ["Next difficulty", chain.next_difficulty],
+        ["Epoch length", chain.epoch_length + " blocks"],
+      ];
+      for (const [label, value] of items) {
+        const box = document.createElement("div");
+        box.className = "stat";
+        const b = document.createElement("b");
+        b.textContent = value;
+        const s = document.createElement("span");
+        s.textContent = label;
+        box.append(b, s);
+        stats.append(box);
+      }
+      blocks.replaceChildren();
+      for (const block of chain.blocks) {
+        const article = document.createElement("article");
+        const h2 = document.createElement("h2");
+        h2.textContent = "Block " + block.height + "  ·  " + block.note;
+        const dl = document.createElement("dl");
+        const rows = [
+          ["Hash", block.hash],
+          ["Parent", block.parent],
+          ["Difficulty", String(block.difficulty) + "   work 2^" + block.difficulty],
+          ["Nonce", block.nonce],
+          ["Time", new Date(block.timestamp * 1000).toISOString().replace(".000Z", "Z")],
+          ["Epoch seed", block.epoch_seed],
+          ["Program", block.schedule.join("  ")],
+        ];
+        for (const [label, value] of rows) {
+          dl.append(...field(label, value));
+        }
+        article.append(h2, dl);
+        blocks.append(article);
+      }
+    }
+
+    async function load() {
+      const response = await fetch("/api/chain");
+      if (!response.ok) throw new Error(await response.text());
+      render(await response.json());
+    }
+
+    document.querySelector("#mine").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      status.textContent = "Searching nonces…";
+      try {
+        const response = await fetch("/api/mine", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ note: document.querySelector("#note").value }),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "mine failed");
+        status.textContent = "Block " + body.block.height + " found after " + body.attempts + " hashes in " + body.elapsed_ms + " ms.";
+        await load();
+      } catch (err) {
+        status.textContent = err.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    load().catch((err) => { status.textContent = err.message; });
+  </script>
+</body>
+</html>

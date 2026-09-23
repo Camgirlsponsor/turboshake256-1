@@ -23,8 +23,11 @@ This is not a claim of cryptographic security, and it is not an attempt to ban A
 | Path | What it is |
 | --- | --- |
 | `docs/DFPoW-256.md` | Design, normative spec, vectors |
-| `python/dfpow.py` | Reference implementation |
+| `python/dfpow.py` | Independent reference hasher |
 | `python/test_dfpow.py` | Vectors and structural checks |
+| `internal/dfpow` | Go hasher. It must match the Python vectors |
+| `internal/chain` | Single-node chain: coinbase, epoch seed, integer ASERT |
+| `cmd/dfpowd` | Miner and local block viewer |
 
 ## Running the tests
 
@@ -33,4 +36,16 @@ pip install -r requirements.txt
 cd python && python3 -m unittest -v
 ```
 
-The reference depends on the official BLAKE3 library (`blake3` 1.0.9). Draft 0.1 is identified by the vectors in the spec. An implementation that prints a different digest for nonce 1000 is not this draft.
+The Python reference depends on the official BLAKE3 library (`blake3` 1.0.9). Draft 0.1 is identified by the vectors in the spec. An implementation that prints a different digest for nonce 1000 is not this draft.
+
+## Prototype node
+
+Go is the node. Python remains the check on the hasher. The prototype is one process: it mines into `chain.json` and can serve a page that shows each block's hash, difficulty, and the first eight accents of that nonce's program.
+
+```bash
+go test ./...
+go run ./cmd/dfpowd mine -n 12
+go run ./cmd/dfpowd serve
+```
+
+The viewer listens on `127.0.0.1:8080`. Epoch length is 8 blocks, the ideal interval is 4 seconds, and the ASERT half-life is 16 seconds, so difficulty moves during a short session. Those are prototype settings. The write-up's recommended epoch for a longer-lived chain is 128 blocks. Coinbase payments are labeled names, not signatures, and nothing is broadcast to a peer.
