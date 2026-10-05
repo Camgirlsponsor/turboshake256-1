@@ -7,90 +7,215 @@
   <style>
     :root {
       color-scheme: light;
-      --ink: #1c1915;
-      --muted: #5c564c;
-      --line: #d9d1c3;
-      --paper: #f6f1e8;
-      --card: #fffdf8;
-      --accent: #8a3e16;
+      --ink: #1a1612;
+      --muted: #6b6256;
+      --line: #e0d5c4;
+      --paper: #f3eee4;
+      --card: #fffaf3;
+      --copper: #c4622d;
+      --gold: #e0b15a;
+      --night: #16120e;
+      --night-2: #241c16;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font-family: "Iowan Old Style", Palatino, Georgia, serif;
       background: var(--paper);
       color: var(--ink);
     }
-    header, main { max-width: 980px; margin: 0 auto; padding: 20px 20px 0; }
-    main { padding-bottom: 64px; }
-    h1 { font-size: 1.8rem; margin: 0; letter-spacing: -0.03em; }
-    h2 { font-size: 1.15rem; margin: 0 0 8px; }
-    a { color: var(--accent); }
-    nav { display: flex; gap: 14px; margin: 10px 0; }
-    form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+    a { color: var(--copper); }
+    button, input, select { font: inherit; }
+    .mast {
+      background:
+        radial-gradient(900px 280px at 80% -10%, rgba(196, 98, 45, 0.35), transparent 60%),
+        linear-gradient(180deg, #1c1612 0%, var(--night) 100%);
+      color: #f6f0e6;
+    }
+    .mast-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 24px 8px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 24px;
+      align-items: center;
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      font-family: ui-sans-serif, "Segoe UI", sans-serif;
+      font-size: 0.72rem;
+      color: var(--gold);
+    }
+    h1 { margin: 0; font-size: 3rem; font-weight: 500; letter-spacing: -0.04em; }
+    .lede { margin: 8px 0 0; max-width: 42rem; color: #d9d0c3; line-height: 1.45; }
+    nav { display: flex; gap: 16px; margin: 16px 0 8px; }
+    nav a { color: #f6f0e6; text-decoration: none; border-bottom: 1px solid transparent; }
+    nav a:hover { border-bottom-color: var(--gold); }
+    form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     input, button, select {
-      font: inherit;
       font-size: 1rem;
       padding: 8px 12px;
     }
-    input, select { border: 1px solid var(--line); background: white; }
+    input, select { border: 1px solid var(--line); background: white; color: var(--ink); }
     input[type="search"], input.wide { min-width: min(100%, 280px); flex: 1; }
-    button { background: var(--accent); color: white; border: 0; cursor: pointer; }
+    button { background: var(--copper); color: white; border: 0; cursor: pointer; }
     button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.6; cursor: wait; }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px;
-      margin: 16px 0;
+    .mast button { background: var(--copper); }
+    .seal { width: 260px; height: 260px; display: block; margin-left: auto; }
+    .seal .ring { transform-origin: 160px 160px; animation: turn 90s linear infinite; }
+    @keyframes turn { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .seal .ring { animation: none; }
     }
-    .stat, article, .card {
+    .stats {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 8px 24px 22px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .stat b {
+      display: block;
+      font-size: 1.25rem;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+      overflow-wrap: anywhere;
+    }
+    .stat span {
+      font-family: ui-sans-serif, "Segoe UI", sans-serif;
+      font-size: 0.75rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #b7aea2;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 8px 24px 72px; }
+    .rail-wrap, .spark-card, article, .card {
       background: var(--card);
       border: 1px solid var(--line);
-      padding: 12px 14px;
     }
-    .stat b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-    .stat span, .muted { color: var(--muted); }
-    article, .card { margin-top: 12px; }
+    .rail-wrap { margin-top: 18px; padding: 14px 14px 10px; }
+    .rail-wrap h2, .spark-card h2, article h2, .card h2 { font-size: 1.05rem; margin: 0 0 8px; font-weight: 500; }
+    .rail {
+      display: flex;
+      gap: 0;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .plate {
+      flex: 0 0 auto;
+      width: 92px;
+      text-decoration: none;
+      color: var(--ink);
+      text-align: center;
+      position: relative;
+      padding-right: 18px;
+    }
+    .plate::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 36px;
+      width: 18px;
+      height: 2px;
+      background: var(--copper);
+    }
+    .plate:last-child { padding-right: 0; }
+    .plate:last-child::after { display: none; }
+    .plate svg { display: block; margin: 0 auto 4px; }
+    .plate b { display: block; font-size: 0.95rem; }
+    .plate span { color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; }
+    .spark-card { margin-top: 12px; padding: 14px; }
+    .spark-card svg { width: 100%; height: 84px; display: block; }
+    #status { min-height: 1.4em; color: var(--muted); }
+    article, .card { margin-top: 12px; padding: 12px 14px; }
     dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: 4px 12px; margin: 0; }
     dt { color: var(--muted); }
     dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
     table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
     th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 500; }
-    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
-    #status { min-height: 1.4em; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .caption { margin: 0 0 10px; color: var(--muted); font-size: 0.92rem; }
+    footer {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px 36px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    @media (max-width: 800px) {
+      .mast-inner { grid-template-columns: 1fr; }
+      .seal { margin: 0 auto; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      h1 { font-size: 2.4rem; }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <h1>DFPoW</h1>
-    <p class="muted">Proof-of-work blocks, signed payments, and any node that has more work.</p>
-    <nav>
-      <a href="#/">Chain</a>
-      <a href="#/wallet">Wallet</a>
-      <a href="#/mempool">Mempool</a>
-    </nav>
-    <form id="search">
-      <input id="q" type="search" placeholder="Height, block, transaction, or address" aria-label="Search">
-      <button type="submit">Look up</button>
-    </form>
+  <header class="mast">
+    <div class="mast-inner">
+      <div>
+        <p class="eyebrow">DFPoW-256 testnet</p>
+        <h1>DFPoW</h1>
+        <p class="lede">One published genesis. The ring is the program inside the latest block: every spoke is an accent the nonce selected. More work replaces the chain.</p>
+        <nav>
+          <a href="#/">Chain</a>
+          <a href="#/wallet">Wallet</a>
+          <a href="#/mempool">Mempool</a>
+        </nav>
+        <form id="search">
+          <input id="q" type="search" placeholder="Height, block, transaction, or address" aria-label="Search">
+          <button type="submit">Look up</button>
+        </form>
+      </div>
+      <div id="seal"></div>
+    </div>
+    <section class="stats" id="stats"></section>
   </header>
   <main>
-    <section class="stats" id="stats"></section>
+    <div id="rail"></div>
+    <div id="spark"></div>
     <p id="status"></p>
     <div id="view"></div>
   </main>
+  <footer id="rules"></footer>
   <script>
     const COIN = 100000000n;
+    const ACCENT = {
+      XOR: "#e07a3d",
+      ADD: "#e2b15a",
+      ROT: "#2f8f86",
+      MUL: "#c45b6a",
+      SBOX: "#8ea0dc",
+      XORROT: "#8fbf7a",
+      ADDROT: "#d9a07a",
+      MIX: "#f3ecdf"
+    };
+    const NS = "http://www.w3.org/2000/svg";
     const statsEl = document.querySelector("#stats");
+    const sealEl = document.querySelector("#seal");
+    const railEl = document.querySelector("#rail");
+    const sparkEl = document.querySelector("#spark");
     const viewEl = document.querySelector("#view");
     const statusEl = document.querySelector("#status");
+    const rulesEl = document.querySelector("#rules");
     let chain = null;
     let wallet = null;
 
+    function el(name, attrs, children) {
+      const node = document.createElementNS(NS, name);
+      for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, value);
+      for (const child of children || []) node.append(child);
+      return node;
+    }
+
     function coins(atoms) {
-      const n = BigInt(atoms);
+      const n = BigInt(atoms || 0);
       const whole = n / COIN;
       let frac = (n % COIN).toString().padStart(8, "0").replace(/0+$/, "");
       return frac ? whole + "." + frac : whole.toString();
@@ -140,27 +265,124 @@
       return article;
     }
 
+    function seal(hash, schedule, height, difficulty) {
+      const ops = schedule && schedule.length ? schedule : [];
+      const n = ops.length || 64;
+      const spokes = [];
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+        const inner = 108;
+        const outer = 144;
+        spokes.push(el("line", {
+          x1: (160 + Math.cos(a) * inner).toFixed(2),
+          y1: (160 + Math.sin(a) * inner).toFixed(2),
+          x2: (160 + Math.cos(a) * outer).toFixed(2),
+          y2: (160 + Math.sin(a) * outer).toFixed(2),
+          stroke: ACCENT[ops[i]] || "#e0b15a",
+          "stroke-width": n > 64 ? "1.4" : "2.2",
+          "stroke-linecap": "round"
+        }));
+      }
+      const crumbs = [];
+      const hex = hash || "";
+      for (let i = 0; i < 32; i++) {
+        const a = (i / 32) * Math.PI * 2 - Math.PI / 2;
+        const nibble = parseInt(hex.substr(i * 2, 2), 16) || 0;
+        crumbs.push(el("circle", {
+          cx: (160 + Math.cos(a) * 78).toFixed(2),
+          cy: (160 + Math.sin(a) * 78).toFixed(2),
+          r: (1.6 + (nibble % 16) / 8).toFixed(2),
+          fill: "#e0b15a",
+          opacity: (0.35 + (nibble % 16) / 28).toFixed(2)
+        }));
+      }
+      const label = el("text", {
+        x: "160", y: "154", "text-anchor": "middle", fill: "#f6f0e6",
+        "font-size": "46", "font-family": "Georgia, serif"
+      });
+      label.textContent = String(height);
+      const sub = el("text", {
+        x: "160", y: "180", "text-anchor": "middle", fill: "#e0b15a",
+        "font-size": "13", "font-family": "ui-monospace, monospace", "letter-spacing": "0.18em"
+      });
+      sub.textContent = "D " + difficulty;
+      return el("svg", {
+        viewBox: "0 0 320 320",
+        class: "seal",
+        role: "img",
+        "aria-label": "Block " + height + ", difficulty " + difficulty + ". The ring is that block's generated program."
+      }, [
+        el("circle", { cx: "160", cy: "160", r: "150", fill: "#211913", stroke: "#c4622d", "stroke-width": "1.5" }),
+        el("circle", { cx: "160", cy: "160", r: "96", fill: "none", stroke: "#3a2e24", "stroke-width": "1" }),
+        el("g", { class: "ring" }, spokes),
+        ...crumbs,
+        label,
+        sub
+      ]);
+    }
+
+    function plateMark(hash) {
+      const cells = [];
+      const hex = hash || "";
+      for (let i = 0; i < 16; i++) {
+        const on = (parseInt(hex.substr(i, 1), 16) || 0) > 7;
+        const x = 6 + (i % 4) * 12;
+        const y = 8 + Math.floor(i / 4) * 12;
+        cells.push(el("rect", {
+          x: String(x), y: String(y), width: "8", height: "8", rx: "1.5",
+          fill: on ? "#c4622d" : "#efe4d4"
+        }));
+      }
+      return el("svg", { viewBox: "0 0 56 62", width: "56", height: "62", "aria-hidden": "true" }, [
+        el("rect", { x: "1", y: "1", width: "54", height: "60", rx: "6", fill: "#fffaf3", stroke: "#c4622d" }),
+        ...cells
+      ]);
+    }
+
+    function sparkline(blocks) {
+      const seq = blocks.slice().reverse();
+      const w = 640;
+      const h = 78;
+      if (!seq.length) return el("svg", { viewBox: "0 0 " + w + " " + h });
+      const values = seq.map((block) => Number(block.difficulty));
+      const max = Math.max(...values);
+      const min = Math.min(...values);
+      const span = Math.max(1, max - min);
+      const coords = values.map((value, i) => {
+        const x = seq.length === 1 ? w / 2 : (i / (seq.length - 1)) * (w - 16) + 8;
+        const y = 10 + (1 - (value - min) / span) * (h - 24);
+        return [x, y];
+      });
+      const line = coords.map((point) => point[0].toFixed(1) + "," + point[1].toFixed(1)).join(" ");
+      const last = coords[coords.length - 1];
+      return el("svg", { viewBox: "0 0 " + w + " " + h, role: "img", "aria-label": "Difficulty from genesis to the tip" }, [
+        el("polyline", { points: line, fill: "none", stroke: "#c4622d", "stroke-width": "2.5", "stroke-linejoin": "round", "stroke-linecap": "round" }),
+        el("circle", { cx: last[0].toFixed(1), cy: last[1].toFixed(1), r: "4", fill: "#e0b15a", stroke: "#1a1612" })
+      ]);
+    }
+
     async function load() {
       const [chainRes, walletRes] = await Promise.all([fetch("/api/chain"), fetch("/api/wallet")]);
       if (!chainRes.ok) throw new Error(await chainRes.text());
       if (!walletRes.ok) throw new Error(await walletRes.text());
       chain = await chainRes.json();
       wallet = await walletRes.json();
-      renderStats();
+      renderMast();
       const typing = document.activeElement && document.activeElement.closest("#view form");
       if (!typing) render();
     }
 
-    function renderStats() {
+    function renderMast() {
+      const tip = chain.blocks[0];
+      sealEl.replaceChildren(seal(tip.hash, chain.tip_schedule || tip.schedule, tip.height, tip.difficulty));
       statsEl.replaceChildren();
-      const mem = (chain.mempool || []).length;
       const items = [
         ["Height", String(chain.height)],
         ["Work", chain.work],
         ["Supply", coins(chain.supply)],
         ["Next difficulty", String(chain.next_difficulty)],
-        ["Mempool", String(mem)],
-        ["Peers", String((chain.peers || []).length)],
+        ["Mempool", String((chain.mempool || []).length)],
+        ["Peers", String((chain.peers || []).length)]
       ];
       for (const [label, value] of items) {
         const box = document.createElement("div");
@@ -172,6 +394,43 @@
         box.append(b, s);
         statsEl.append(box);
       }
+
+      const rail = document.createElement("div");
+      rail.className = "rail-wrap";
+      const title = document.createElement("h2");
+      title.textContent = "Chain";
+      const caption = document.createElement("p");
+      caption.className = "caption";
+      caption.textContent = "Each plate is a block. The marks are taken from its hash, and the copper link is the parent pointer.";
+      const row = document.createElement("div");
+      row.className = "rail";
+      const shown = chain.blocks.slice(0, 16).reverse();
+      for (const block of shown) {
+        const a = document.createElement("a");
+        a.className = "plate";
+        a.href = "#/block/" + block.hash;
+        a.append(plateMark(block.hash));
+        const height = document.createElement("b");
+        height.textContent = String(block.height);
+        const diff = document.createElement("span");
+        diff.textContent = "d " + block.difficulty;
+        a.append(height, diff);
+        row.append(a);
+      }
+      rail.append(title, caption, row);
+      railEl.replaceChildren(rail);
+
+      const spark = document.createElement("div");
+      spark.className = "spark-card";
+      const sparkTitle = document.createElement("h2");
+      sparkTitle.textContent = "Difficulty";
+      const sparkCaption = document.createElement("p");
+      sparkCaption.className = "caption";
+      sparkCaption.textContent = "Integer ASERT anchored at genesis. On time holds the difficulty still. A faster chain climbs, up to 256.";
+      spark.append(sparkTitle, sparkCaption, sparkline(chain.blocks));
+      sparkEl.replaceChildren(spark);
+
+      rulesEl.textContent = "Epoch " + chain.epoch_length + " blocks · target " + chain.ideal_block_time + "s · half-life " + chain.half_life + "s · reward matures after " + chain.coinbase_maturity + " blocks · halves every " + chain.halving_interval + " blocks · genesis " + short(chain.genesis);
     }
 
     function route() {
@@ -233,7 +492,7 @@
         const list = document.createElement("ul");
         for (const peer of chain.peers) {
           const li = document.createElement("li");
-          li.textContent = peer.addr + (peer.error ? " — " + peer.error : " — height " + (peer.height ?? ""));
+          li.textContent = peer.addr + (peer.error ? " — " + peer.error : " — height " + (peer.height ?? "") + (peer.work ? ", work " + peer.work : ""));
           list.append(li);
         }
         peers.append(list);
@@ -256,6 +515,15 @@
         article.append(dl);
         viewEl.append(article);
       }
+    }
+
+    function balanceText(addr) {
+      let text = coins(addr.balance);
+      if (addr.immature && Number(addr.immature) > 0) {
+        text += " spendable, " + coins(addr.immature) + " maturing";
+        if (addr.unlocks) text += " at height " + addr.unlocks;
+      }
+      return text;
     }
 
     function renderWallet() {
@@ -297,7 +565,7 @@
         const address = document.createElement("td");
         address.append(link("#/address/" + addr.address, short(addr.address), addr.address));
         const balance = document.createElement("td");
-        balance.textContent = coins(addr.balance);
+        balance.textContent = balanceText(addr);
         tr.append(label, address, balance);
         table.append(tr);
       }
@@ -360,7 +628,7 @@
       const sendCard = card("Send");
       const hint = document.createElement("p");
       hint.className = "muted";
-      hint.textContent = "Amounts are in coins. 1 coin = 100000000 units. The fee is paid to the miner of the block that confirms this payment.";
+      hint.textContent = "Amounts are in coins. A block reward can be spent after " + chain.coinbase_maturity + " later blocks. The fee is paid to the miner who confirms this payment, and it matures with that coinbase.";
       sendCard.append(hint, form);
       viewEl.append(sendCard);
     }
@@ -483,7 +751,8 @@
         const dl = document.createElement("dl");
         dl.append(
           ...field("Address", body.address),
-          ...field("Balance", coins(body.balance)),
+          ...field("Spendable", coins(body.balance)),
+          ...field("Maturing", coins(body.immature || 0) + (body.unlocks ? " at height " + body.unlocks : "")),
           ...field("Next nonce", String(body.nonce)),
         );
         if (body.label) dl.append(...field("Label", body.label));

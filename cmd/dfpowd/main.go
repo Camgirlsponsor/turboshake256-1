@@ -11,9 +11,11 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +47,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage:\n  dfpowd mine -n 12 [-data chain.json] [-wallet wallet.json]\n  dfpowd serve [-addr 127.0.0.1:8080] [-data chain.json] [-wallet wallet.json] [-peer host:port]\n")
+	fmt.Fprintf(os.Stderr, "usage:\n  dfpowd mine -n 12 [-data chain.json] [-wallet wallet.json]\n  dfpowd serve [-addr 127.0.0.1:8080] [-data chain.json] [-wallet wallet.json] [-peer host:port]\n\nWallet, send, and mine accept connections from localhost only.\n")
 }
 
 type stringsFlag []string
@@ -64,7 +66,7 @@ func mine(args []string) {
 	walletPath := fs.String("wallet", "wallet.json", "wallet file")
 	note := fs.String("note", "local", "coinbase note")
 	_ = fs.Parse(args)
-	c, _ := openNode(*path, *walletPath, nil)
+	c, _ := openNode(*path, *walletPath)
 	printBlock(c.Tip(), chain.Stats{})
 	for i := 0; i < *n; i++ {
 		block, stats, err := c.Mine(*note, runtime.NumCPU())
@@ -100,7 +102,7 @@ func serve(args []string) {
 	log.Fatal(http.ListenAndServe(*addr, node.routes()))
 }
 
-func openNode(path, walletPath string, peers []string) (*chain.Chain, *chain.Wallet) {
+func openNode(path, walletPath string) (*chain.Chain, *chain.Wallet) {
 	wallet, err := chain.LoadWallet(walletPath)
 	if err != nil {
 		log.Fatal(err)
@@ -110,22 +112,16 @@ func openNode(path, walletPath string, peers []string) (*chain.Chain, *chain.Wal
 		log.Fatal(err)
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if raw := fetchChain(peers); len(raw) > 0 {
-			if err := os.WriteFile(path, raw, 0o644); err != nil {
-				log.Fatal(err)
-			}
-			log.Printf("joined peer chain into %s", path)
-		} else {
-			priv, err := wallet.Private(pub)
-			if err != nil {
-				log.Fatal(err)
-			}
-			c, err := chain.Create(path, pub, priv, nil)
-			if err != nil {
-				log.Fatal(err)
-			}
-			return c, wallet
+		priv, err := wallet.Private(pub)
+		if err != nil {
+			log.Fatal(err)
 		}
+		c, err := chain.Create(path, pub, priv, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("wrote published genesis to %s", path)
+		return c, wallet
 	} else if err != nil {
 		log.Fatal(err)
 	}
@@ -138,7 +134,7 @@ func openNode(path, walletPath string, peers []string) (*chain.Chain, *chain.Wal
 }
 
 func openServer(path, walletPath string, peers []string) *server {
-	c, w := openNode(path, walletPath, peers)
+	c, w := openNode(path, walletPath)
 	bases := make([]string, 0, len(peers))
 	for _, peer := range peers {
 		bases = append(bases, peerURL(peer))
@@ -150,24 +146,6 @@ func openServer(path, walletPath string, peers []string) *server {
 		client: &http.Client{Timeout: 5 * time.Second},
 		status: map[string]peerView{},
 	}
-}
-
-func fetchChain(peers []string) []byte {
-	client := &http.Client{Timeout: 5 * time.Second}
-	for _, peer := range peers {
-		resp, err := client.Get(peerURL(peer) + "/peer/chain")
-		if err != nil {
-			log.Printf("peer %s: %v", peer, err)
-			continue
-		}
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-		resp.Body.Close()
-		if err != nil || resp.StatusCode != http.StatusOK || len(raw) == 0 {
-			continue
-		}
-		return raw
-	}
-	return nil
 }
 
 func peerURL(peer string) string {
@@ -211,8 +189,11 @@ func (s *server) sync() {
 
 func (s *server) syncPeer(peer string) {
 	var status struct {
-		Height uint64 `json:"height"`
-		Work   string `json:"work"`
+		Height  uint64 `json:"height"`
+		Hash    string `json:"hash"`
+		Work    string `json:"work"`
+		Genesis string `json:"genesis"`
+		ChainID string `json:"chain_id"`
 	}
 	view := peerView{Addr: peer}
 	if err := s.getJSON(peer+"/peer/status", &status); err != nil {
@@ -222,6 +203,18 @@ func (s *server) syncPeer(peer string) {
 	}
 	view.Height = status.Height
 	view.Work = status.Work
+	id := chain.ChainID()
+	if status.ChainID != "" && status.ChainID != hex.EncodeToString(id[:]) {
+		view.Error = "different chain id"
+		s.setPeer(view)
+		return
+	}
+	genesis, ok := s.chain.BlockAt(0)
+	if !ok || (status.Genesis != "" && status.Genesis != hex.EncodeToString(genesis.Hash[:])) {
+		view.Error = "different genesis"
+		s.setPeer(view)
+		return
+	}
 	remote, ok := new(big.Int).SetString(status.Work, 10)
 	if !ok {
 		view.Error = "bad work"
@@ -229,24 +222,91 @@ func (s *server) syncPeer(peer string) {
 		return
 	}
 	if remote.Cmp(s.chain.Work()) > 0 {
-		raw, err := s.getBytes(peer + "/peer/chain")
-		if err != nil {
+		if err := s.pullBlocks(peer, status.Height); err != nil {
 			view.Error = err.Error()
 			s.setPeer(view)
 			return
 		}
-		adopted, err := s.chain.Consider(raw)
-		if err != nil {
-			view.Error = err.Error()
-			s.setPeer(view)
-			return
-		}
-		if adopted {
-			log.Printf("adopted chain from %s at height %d", peer, s.chain.Tip().Height)
-			go s.broadcast(peer)
+		if remote.Cmp(s.chain.Work()) > 0 && s.chain.Tip().Height >= status.Height {
+			log.Printf("peer %s has more work at height %d than the adopted chain", peer, status.Height)
 		}
 	}
 	s.setPeer(view)
+}
+
+func (s *server) pullBlocks(peer string, remoteHeight uint64) error {
+	localHeight := s.chain.Tip().Height
+	hi := localHeight
+	if remoteHeight < hi {
+		hi = remoteHeight
+	}
+	match, err := s.commonHeight(peer, hi)
+	if err != nil {
+		return err
+	}
+	var batch []chain.Block
+	from := match + 1
+	for from <= remoteHeight {
+		part, err := s.fetchBlocks(peer, from, 32)
+		if err != nil {
+			return err
+		}
+		if len(part) == 0 {
+			break
+		}
+		batch = append(batch, part...)
+		from += uint64(len(part))
+	}
+	if len(batch) == 0 {
+		return nil
+	}
+	adopted, err := s.chain.Adopt(batch)
+	if err != nil {
+		return err
+	}
+	if adopted {
+		log.Printf("adopted blocks from %s at height %d", peer, s.chain.Tip().Height)
+		go s.broadcastBlocks(s.chain.BlocksFrom(match+1, int(s.chain.Tip().Height-match)), peer)
+	}
+	return nil
+}
+
+func (s *server) commonHeight(peer string, hi uint64) (uint64, error) {
+	if hi == 0 {
+		return 0, nil
+	}
+	step := uint64(1)
+	h := hi
+	for {
+		part, err := s.fetchBlocks(peer, h, 1)
+		if err != nil {
+			return 0, err
+		}
+		local, ok := s.chain.BlockAt(h)
+		if ok && len(part) == 1 && part[0].Hash == local.Hash {
+			return h, nil
+		}
+		if h == 0 {
+			return 0, errors.New("peer chain does not share this genesis")
+		}
+		if h <= step {
+			h = 0
+			continue
+		}
+		h -= step
+		if step < 256 {
+			step *= 2
+		}
+	}
+}
+
+func (s *server) fetchBlocks(peer string, from uint64, limit int) ([]chain.Block, error) {
+	url := fmt.Sprintf("%s/peer/blocks?from=%d&limit=%d", peer, from, limit)
+	raw, err := s.getBytes(url)
+	if err != nil {
+		return nil, err
+	}
+	return chain.UnmarshalBlocks(raw)
 }
 
 func (s *server) setPeer(view peerView) {
@@ -269,8 +329,11 @@ func (s *server) peersSnapshot() []peerView {
 	return out
 }
 
-func (s *server) broadcast(except string) {
-	raw, err := s.chain.Bytes()
+func (s *server) broadcastBlocks(blocks []chain.Block, except string) {
+	if len(blocks) == 0 {
+		return
+	}
+	raw, err := chain.MarshalBlocks(blocks)
 	if err != nil {
 		log.Printf("broadcast: %v", err)
 		return
@@ -279,7 +342,7 @@ func (s *server) broadcast(except string) {
 		if peer == except {
 			continue
 		}
-		s.post(peer+"/peer/chain", raw)
+		s.post(peer+"/peer/blocks", raw)
 	}
 }
 
@@ -335,13 +398,15 @@ func (s *server) routes() http.Handler {
 		writeJSON(w, map[string]any{"transactions": txViews(s.chain.Mempool(), 0, false)})
 	})
 	mux.HandleFunc("GET /api/wallet", s.walletView)
-	mux.HandleFunc("POST /api/wallet/new", s.walletNew)
-	mux.HandleFunc("POST /api/send", s.send)
-	mux.HandleFunc("POST /api/mine", s.mine)
+	mux.HandleFunc("POST /api/wallet/new", localOnly(s.walletNew))
+	mux.HandleFunc("POST /api/send", localOnly(s.send))
+	mux.HandleFunc("POST /api/mine", localOnly(s.mine))
 	mux.HandleFunc("GET /api/block/{id}", s.block)
 	mux.HandleFunc("GET /api/tx/{id}", s.tx)
 	mux.HandleFunc("GET /api/address/{id}", s.address)
 	mux.HandleFunc("GET /peer/status", s.peerStatus)
+	mux.HandleFunc("GET /peer/blocks", s.peerBlocks)
+	mux.HandleFunc("POST /peer/blocks", s.peerAcceptBlocks)
 	mux.HandleFunc("GET /peer/chain", s.peerChain)
 	mux.HandleFunc("POST /peer/chain", s.peerAccept)
 	mux.HandleFunc("POST /peer/tx", s.peerTx)
@@ -389,7 +454,7 @@ func (s *server) mine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	go s.broadcast("")
+	go s.broadcastBlocks([]chain.Block{block}, "")
 	writeJSON(w, map[string]any{
 		"block":      blockView(s.chain.Blocks(), block),
 		"attempts":   stats.Attempts,
@@ -446,11 +511,14 @@ func (s *server) walletView(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, len(addrs))
 	for _, pub := range addrs {
 		bal, nonce := s.chain.Balance(pub)
+		immature, unlocks := s.chain.Immature(pub)
 		items = append(items, map[string]any{
-			"label":   s.wallet.Label(pub),
-			"address": hex.EncodeToString(pub[:]),
-			"balance": bal,
-			"nonce":   nonce,
+			"label":    s.wallet.Label(pub),
+			"address":  hex.EncodeToString(pub[:]),
+			"balance":  bal,
+			"immature": immature,
+			"unlocks":  unlocks,
+			"nonce":    nonce,
 		})
 	}
 	writeJSON(w, map[string]any{"addresses": items})
@@ -508,6 +576,7 @@ func (s *server) address(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bal, nonce := s.chain.Balance(pub)
+	immature, unlocks := s.chain.Immature(pub)
 	hist := s.chain.History(pub)
 	views := make([]map[string]any, 0, len(hist))
 	for _, tx := range hist {
@@ -521,6 +590,8 @@ func (s *server) address(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"address":      hex.EncodeToString(pub[:]),
 		"balance":      bal,
+		"immature":     immature,
+		"unlocks":      unlocks,
 		"nonce":        nonce,
 		"label":        s.wallet.Label(pub),
 		"transactions": views,
@@ -529,13 +600,69 @@ func (s *server) address(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) peerStatus(w http.ResponseWriter, r *http.Request) {
 	tip := s.chain.Tip()
+	genesis, _ := s.chain.BlockAt(0)
 	id := chain.ChainID()
 	writeJSON(w, map[string]any{
 		"height":   tip.Height,
 		"hash":     hex.EncodeToString(tip.Hash[:]),
 		"work":     s.chain.Work().String(),
+		"genesis":  hex.EncodeToString(genesis.Hash[:]),
 		"chain_id": hex.EncodeToString(id[:]),
 	})
+}
+
+func (s *server) peerBlocks(w http.ResponseWriter, r *http.Request) {
+	from, err := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("from is required"))
+		return
+	}
+	limit := 32
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			writeErr(w, http.StatusBadRequest, errors.New("limit"))
+			return
+		}
+		limit = n
+	}
+	if limit > 64 {
+		limit = 64
+	}
+	raw, err := chain.MarshalBlocks(s.chain.BlocksFrom(from, limit))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_, _ = w.Write(raw)
+}
+
+func (s *server) peerAcceptBlocks(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	blocks, err := chain.UnmarshalBlocks(raw)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(blocks) > 64 {
+		writeErr(w, http.StatusBadRequest, errors.New("too many blocks"))
+		return
+	}
+	adopted, err := s.chain.Adopt(blocks)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if adopted {
+		log.Printf("adopted pushed blocks at height %d", s.chain.Tip().Height)
+		go s.broadcastBlocks(blocks, "")
+	}
+	writeJSON(w, map[string]any{"adopted": adopted, "height": s.chain.Tip().Height})
 }
 
 func (s *server) peerChain(w http.ResponseWriter, r *http.Request) {
@@ -561,7 +688,6 @@ func (s *server) peerAccept(w http.ResponseWriter, r *http.Request) {
 	}
 	if adopted {
 		log.Printf("adopted pushed chain at height %d", s.chain.Tip().Height)
-		go s.broadcast("")
 	}
 	writeJSON(w, map[string]any{"adopted": adopted, "height": s.chain.Tip().Height})
 }
@@ -603,19 +729,34 @@ func (s *server) snapshot() map[string]any {
 	}
 	id := chain.ChainID()
 	return map[string]any{
-		"height":           tip.Height,
-		"work":             s.chain.Work().String(),
-		"next_difficulty":  chain.RequiredDifficulty(blocks[0].Time, tip.Height+1, nextTime),
-		"epoch_length":     chain.EpochLength,
-		"ideal_block_time": chain.IdealBlockTime,
-		"half_life":        chain.HalfLife,
-		"chain_id":         hex.EncodeToString(id[:]),
-		"supply":           (tip.Height + 1) * chain.Subsidy,
-		"coin":             chain.Coin,
-		"mempool":          txViews(s.chain.Mempool(), 0, false),
-		"peers":            s.peersSnapshot(),
-		"blocks":           views,
+		"height":            tip.Height,
+		"work":              s.chain.Work().String(),
+		"next_difficulty":   chain.RequiredDifficulty(blocks[0].Time, tip.Height+1, nextTime),
+		"epoch_length":      chain.EpochLength,
+		"ideal_block_time":  chain.IdealBlockTime,
+		"half_life":         chain.HalfLife,
+		"chain_id":          hex.EncodeToString(id[:]),
+		"supply":            chain.Supply(tip.Height),
+		"coin":              chain.Coin,
+		"initial_subsidy":   chain.InitialSubsidy,
+		"halving_interval":  chain.HalvingInterval,
+		"coinbase_maturity": chain.CoinbaseMaturity,
+		"genesis":           hex.EncodeToString(blocks[0].Hash[:]),
+		"tip_schedule":      tipSchedule(blocks, tip),
+		"mempool":           txViews(s.chain.Mempool(), 0, false),
+		"peers":             s.peersSnapshot(),
+		"blocks":            views,
 	}
+}
+
+func tipSchedule(blocks []chain.Block, tip chain.Block) []string {
+	epoch := chain.EpochSeed(blocks, tip.Height)
+	id := chain.ChainID()
+	schedule, err := dfpow.Schedule(id[:], epoch, tip.Header)
+	if err != nil {
+		return nil
+	}
+	return schedule
 }
 
 func blockView(blocks []chain.Block, block chain.Block) map[string]any {
@@ -678,6 +819,25 @@ func txView(tx chain.Tx, height uint64, confirmed bool) map[string]any {
 		view["to"] = hex.EncodeToString(tx.Recipient[:])
 	}
 	return view
+}
+
+func localOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !loopback(r.RemoteAddr) {
+			writeErr(w, http.StatusForbidden, errors.New("wallet and mining stay on localhost"))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func loopback(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseID(s string) ([32]byte, error) {
