@@ -1,8 +1,9 @@
-// Package chain is the DFPoW prototype ledger.
+// Package chain is the DFPoW testnet ledger.
 //
-// Blocks use the draft header, the draft epoch rule, and ASERT on the
-// integer difficulty ladder. Payments are ed25519 transfers against account
-// balances. Peers exchange chain files; the chain with more work wins.
+// Every node starts from the same published genesis. Blocks use the draft
+// header, a 128-block epoch, and integer ASERT with no toy difficulty cap.
+// Coinbase rewards mature before they can be spent, and the subsidy halves.
+// Peers exchange blocks; the chain with more work wins.
 package chain
 
 import (
@@ -21,32 +22,43 @@ import (
 )
 
 const (
-	EpochLength       = 8
-	IdealBlockTime    = 4
-	HalfLife          = 16
-	GenesisDifficulty = 10
+	EpochLength       = 128
+	IdealBlockTime    = 30
+	HalfLife          = 3600
+	GenesisDifficulty = 8
 	MinDifficulty     = 8
-	MaxDifficulty     = 16
+	MaxDifficulty     = 256
+	GenesisTime       = 1_700_000_000
 	Version           = 1
 	FutureLimit       = 2 * 60 * 60
 	Coin              = 100_000_000
-	Subsidy           = 50 * Coin
-	fileVersion       = 2
+	InitialSubsidy    = 50 * Coin
+	HalvingInterval   = 210_000
+	CoinbaseMaturity  = 10
+	fileVersion       = 3
 )
 
 var (
-	chainID = func() [16]byte {
-		var id [16]byte
-		copy(id[:], "dfpow-proto-v01")
-		return id
-	}()
-	genesisEpoch = func() [32]byte {
-		var seed [32]byte
-		copy(seed[:], "DFPoW-prototype-epoch-seed!!!!!")
-		return seed
-	}()
+	// chainID is inside every hash. It names this network and no other.
+	chainID = [16]byte{
+		'd', 'f', 'p', 'o', 'w', '-', 't', 'e', 's', 't', 'n', 'e', 't', '-', '0', '1',
+	}
+	// genesisEpoch is the dataset seed until block 128.
+	genesisEpoch = [32]byte{
+		'D', 'F', 'P', 'o', 'W', '-', 't', 'e', 's', 't', 'n', 'e', 't', '-', '0', '1',
+		'-', 'e', 'p', 'o', 'c', 'h', '-', 's', 'e', 'e', 'd', '-', 'v', '1', '!', '!',
+	}
+	// genesisPub receives the genesis coinbase. The private key is not in
+	// this repository, so that output cannot be spent.
+	genesisPub = [32]byte{
+		'D', 'F', 'P', 'o', 'W', '-', 't', 'e', 's', 't', 'n', 'e', 't', '-', '0', '1',
+		'-', 'g', 'e', 'n', 'e', 's', 'i', 's', '-', 'o', 'u', 't', 'p', 'u', 't', '!',
+	}
 	domainTxid   = tag16("DFPW-TXID-v01")
 	domainMerkle = tag16("DFPW-MERKLE-v01")
+	genesisOnce  sync.Once
+	genesisBlock Block
+	genesisErr   error
 )
 
 func tag16(label string) [16]byte {
@@ -115,26 +127,77 @@ func newChain(now func() uint32, pub [32]byte, priv ed25519.PrivateKey) (*Chain,
 	if now == nil {
 		now = func() uint32 { return uint32(time.Now().Unix()) }
 	}
+	block, err := publishedGenesis()
+	if err != nil {
+		return nil, err
+	}
 	c := &Chain{
 		work:   big.NewInt(0),
 		state:  map[[32]byte]acct{},
 		now:    now,
 		payee:  pub,
 		signer: priv,
+		blocks: []Block{block},
 	}
-	if err := c.mineGenesis(); err != nil {
+	if err := c.validate(block, nil, block.Time); err != nil {
 		return nil, err
 	}
-	parentTime := c.blocks[0].Time
-	if err := c.validate(c.blocks[0], nil, parentTime); err != nil {
-		return nil, err
-	}
-	state, err := applyBlock(map[[32]byte]acct{}, c.blocks[0])
+	state, err := applyBlock(map[[32]byte]acct{}, block)
 	if err != nil {
 		return nil, err
 	}
 	c.state = state
+	c.work = dfpowWork(block.Difficulty)
 	return c, nil
+}
+
+// publishedGenesis mines the network's one genesis block. The timestamp,
+// coinbase, and search are fixed, so every process finds the same header.
+func publishedGenesis() (Block, error) {
+	genesisOnce.Do(func() {
+		c := &Chain{now: func() uint32 { return GenesisTime }}
+		block, _, err := c.mineOn(nil, nil, GenesisTime, "genesis", genesisPub, map[[32]byte]acct{}, nil, nil, 1)
+		if err != nil {
+			genesisErr = err
+			return
+		}
+		genesisBlock = block
+	})
+	if genesisErr != nil {
+		return Block{}, genesisErr
+	}
+	return genesisBlock, nil
+}
+
+// SubsidyAt is the new coins minted at height. The reward halves every
+// HalvingInterval blocks and eventually reaches zero.
+func SubsidyAt(height uint64) uint64 {
+	era := height / HalvingInterval
+	if era >= 63 {
+		return 0
+	}
+	return uint64(InitialSubsidy) >> era
+}
+
+// Supply is the sum of subsidies from genesis through tipHeight.
+func Supply(tipHeight uint64) uint64 {
+	var total uint64
+	var height uint64
+	for height <= tipHeight {
+		era := height / HalvingInterval
+		if era >= 63 {
+			break
+		}
+		reward := uint64(InitialSubsidy) >> era
+		end := (era + 1) * HalvingInterval
+		if end > tipHeight+1 {
+			end = tipHeight + 1
+		}
+		span := end - height
+		total += reward * span
+		height = end
+	}
+	return total
 }
 
 // Open loads a chain file. The file must already exist.
@@ -150,17 +213,6 @@ func Open(path string) (*Chain, error) {
 	}
 	loaded.path = path
 	return loaded, nil
-}
-
-func (c *Chain) mineGenesis() error {
-	stamp := c.now()
-	block, _, err := c.mineOn(nil, nil, stamp, "genesis", c.payee, map[[32]byte]acct{}, nil, nil, 1)
-	if err != nil {
-		return err
-	}
-	c.blocks = []Block{block}
-	c.work = dfpowWork(block.Difficulty)
-	return nil
 }
 
 // Payee is the address that receives the next coinbase.
@@ -205,6 +257,32 @@ func (c *Chain) Blocks() []Block {
 	return out
 }
 
+// BlockAt returns the block at height, if the chain has one.
+func (c *Chain) BlockAt(height uint64) (Block, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if height >= uint64(len(c.blocks)) {
+		return Block{}, false
+	}
+	return c.blocks[height], true
+}
+
+// BlocksFrom returns up to limit blocks starting at height.
+func (c *Chain) BlocksFrom(from uint64, limit int) []Block {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit < 1 || from >= uint64(len(c.blocks)) {
+		return nil
+	}
+	end := int(from) + limit
+	if end > len(c.blocks) {
+		end = len(c.blocks)
+	}
+	out := make([]Block, end-int(from))
+	copy(out, c.blocks[from:end])
+	return out
+}
+
 // Work is the sum of 2^difficulty over the chain.
 func (c *Chain) Work() *big.Int {
 	c.mu.Lock()
@@ -212,12 +290,34 @@ func (c *Chain) Work() *big.Int {
 	return new(big.Int).Set(c.work)
 }
 
-// Balance reports the confirmed balance and the next transfer nonce.
+// Balance reports the spendable balance and the next transfer nonce.
+// Coinbase rewards are omitted until they mature.
 func (c *Chain) Balance(pub [32]byte) (uint64, uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a := c.state[pub]
 	return a.balance, a.nonce
+}
+
+// Immature reports unspendable coinbase credits and the height at which the
+// oldest of them can be spent.
+func (c *Chain) Immature(pub [32]byte) (uint64, uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return immatureLocked(c.state[pub])
+}
+
+func immatureLocked(a acct) (uint64, uint64) {
+	var amount uint64
+	var unlocks uint64
+	for _, item := range a.pending {
+		amount += item.amount
+		at := item.height + uint64(CoinbaseMaturity)
+		if unlocks == 0 || at < unlocks {
+			unlocks = at
+		}
+	}
+	return amount, unlocks
 }
 
 // Mempool returns pending transfers in arrival order.
@@ -386,9 +486,14 @@ func (c *Chain) mineOn(blocks []Block, parent *Block, stamp uint32, note string,
 			return Block{}, Stats{}, err
 		}
 	}
+	subsidy := SubsidyAt(height)
 	transfers := []Tx{}
 	if parent != nil {
-		transfers = selectTransfers(state, mem, maxTransfers)
+		preview := cloneState(state)
+		if err = matureState(preview, height); err != nil {
+			return Block{}, Stats{}, err
+		}
+		transfers = selectTransfers(preview, mem, maxTransfers)
 	}
 	var fees uint64
 	for _, tx := range transfers {
@@ -409,7 +514,7 @@ func (c *Chain) mineOn(blocks []Block, parent *Block, stamp uint32, note string,
 	)
 	start := time.Now()
 	for attempt := 0; attempt < 4; attempt++ {
-		coinbase := coinbaseTx(height, extra, note, payee, fees)
+		coinbase := coinbaseTx(height, extra, note, payee, subsidy, fees)
 		txs = append([]Tx{coinbase}, transfers...)
 		ids := make([][32]byte, len(txs))
 		for i, tx := range txs {
@@ -431,7 +536,7 @@ func (c *Chain) mineOn(blocks []Block, parent *Block, stamp uint32, note string,
 		return Block{}, Stats{}, errors.New("chain: search did not find a nonce")
 	}
 	binary.LittleEndian.PutUint64(header[76:], nonce)
-	coinbase := coinbaseTx(height, extra, note, payee, fees)
+	coinbase := coinbaseTx(height, extra, note, payee, subsidy, fees)
 	txs[0] = coinbase
 	return Block{
 		Height:     height,
@@ -440,7 +545,7 @@ func (c *Chain) mineOn(blocks []Block, parent *Block, stamp uint32, note string,
 		Nonce:      nonce,
 		ExtraNonce: extra,
 		Note:       note,
-		Amount:     Subsidy,
+		Amount:     subsidy,
 		Header:     header,
 		Hash:       digest,
 		Parent:     prev,
@@ -517,7 +622,7 @@ func (c *Chain) validate(block Block, parent *Block, now uint32) error {
 	if stamp != block.Time || difficulty != block.Difficulty || nonce != block.Nonce {
 		return errors.New("chain: header fields do not match the block")
 	}
-	if block.Amount != Subsidy {
+	if block.Amount != SubsidyAt(block.Height) {
 		return errors.New("chain: subsidy")
 	}
 	ids := make([][32]byte, len(block.Txs))
@@ -540,6 +645,13 @@ func (c *Chain) validate(block Block, parent *Block, now uint32) error {
 		}
 		if difficulty != GenesisDifficulty {
 			return errors.New("chain: genesis difficulty")
+		}
+		want, err := publishedGenesis()
+		if err != nil {
+			return err
+		}
+		if block.Hash != want.Hash || !bytesEqual(block.Header, want.Header) {
+			return errors.New("chain: genesis does not match the published block")
 		}
 	} else {
 		if block.Height != parent.Height+1 {
@@ -647,6 +759,79 @@ func (c *Chain) Consider(raw []byte) (bool, error) {
 	c.dataset = other.dataset
 	c.dataSeed = other.dataSeed
 	c.haveData = other.haveData
+	c.recheckMempool()
+	if err := c.saveLocked(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Adopt connects blocks to a block this chain already has and replaces the
+// local chain when the result has strictly more work.
+func (c *Chain) Adopt(blocks []Block) (bool, error) {
+	if len(blocks) == 0 {
+		return false, nil
+	}
+	for i := 1; i < len(blocks); i++ {
+		if blocks[i].Parent != blocks[i-1].Hash || blocks[i].Height != blocks[i-1].Height+1 {
+			return false, errors.New("chain: blocks are not a sequence")
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	parentIndex := -1
+	for i := range c.blocks {
+		if c.blocks[i].Hash == blocks[0].Parent {
+			parentIndex = i
+			break
+		}
+	}
+	if parentIndex < 0 {
+		return false, errors.New("chain: unknown parent")
+	}
+	if blocks[0].Height != c.blocks[parentIndex].Height+1 {
+		return false, errors.New("chain: height")
+	}
+	prefix := c.blocks[:parentIndex+1]
+	work := new(big.Int)
+	for _, block := range prefix {
+		work.Add(work, dfpowWork(block.Difficulty))
+	}
+	for _, block := range blocks {
+		work.Add(work, dfpowWork(block.Difficulty))
+	}
+	if work.Cmp(c.work) <= 0 {
+		return false, nil
+	}
+	savedBlocks := c.blocks
+	savedState := c.state
+	savedWork := new(big.Int).Set(c.work)
+	state, err := replay(prefix)
+	if err != nil {
+		return false, err
+	}
+	c.blocks = append([]Block(nil), prefix...)
+	c.state = state
+	now := c.now()
+	for _, block := range blocks {
+		parent := &c.blocks[len(c.blocks)-1]
+		if err := c.validate(block, parent, now); err != nil {
+			c.blocks = savedBlocks
+			c.state = savedState
+			c.work = savedWork
+			return false, err
+		}
+		next, err := applyBlock(c.state, block)
+		if err != nil {
+			c.blocks = savedBlocks
+			c.state = savedState
+			c.work = savedWork
+			return false, err
+		}
+		c.state = next
+		c.blocks = append(c.blocks, block)
+	}
+	c.work = work
 	c.recheckMempool()
 	if err := c.saveLocked(); err != nil {
 		return false, err
@@ -880,6 +1065,40 @@ func ChainID() [16]byte { return chainID }
 
 // GenesisEpoch is the dataset seed used before the first epoch boundary.
 func GenesisEpoch() [32]byte { return genesisEpoch }
+
+// MarshalBlocks encodes a block sequence for peers.
+func MarshalBlocks(blocks []Block) ([]byte, error) {
+	stored := make([]fileBlock, len(blocks))
+	for i, block := range blocks {
+		item, err := encodeBlock(block)
+		if err != nil {
+			return nil, err
+		}
+		stored[i] = item
+	}
+	return json.Marshal(struct {
+		Blocks []fileBlock `json:"blocks"`
+	}{Blocks: stored})
+}
+
+// UnmarshalBlocks decodes the payload from MarshalBlocks.
+func UnmarshalBlocks(raw []byte) ([]Block, error) {
+	var payload struct {
+		Blocks []fileBlock `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	out := make([]Block, len(payload.Blocks))
+	for i, item := range payload.Blocks {
+		block, err := decodeBlock(item)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = block
+	}
+	return out, nil
+}
 
 // MarshalTx encodes one transaction for peers.
 func MarshalTx(tx Tx) ([]byte, error) {

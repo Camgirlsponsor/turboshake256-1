@@ -95,6 +95,22 @@ func TestSendThenMinePaysRecipient(t *testing.T) {
 	srv := httptest.NewServer(newServer(node, wallet, nil).routes())
 	defer srv.Close()
 
+	for {
+		bal, _ := node.Balance(miner)
+		if bal >= chain.Coin {
+			break
+		}
+		mined, err := http.Post(srv.URL+"/api/mine", "application/json", bytes.NewBufferString(`{"note":"fund"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(mined.Body)
+		mined.Body.Close()
+		if mined.StatusCode != http.StatusOK {
+			t.Fatalf("fund %d %s", mined.StatusCode, body)
+		}
+	}
+
 	payload, _ := json.Marshal(map[string]any{
 		"from":   hexOf(miner),
 		"to":     hexOf(bob),
@@ -145,8 +161,14 @@ func TestPeerSyncsHeavierChainAndTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := origin.Mine("origin", 1); err != nil {
-		t.Fatal(err)
+	for {
+		bal, _ := origin.Balance(origin.Payee())
+		if bal >= chain.Coin {
+			break
+		}
+		if _, _, err := origin.Mine("origin", 1); err != nil {
+			t.Fatal(err)
+		}
 	}
 	originSrv := httptest.NewServer(newServer(origin, &chain.Wallet{}, nil).routes())
 	defer originSrv.Close()

@@ -39,9 +39,15 @@ type Tx struct {
 	ID        [32]byte
 }
 
+type pending struct {
+	amount uint64
+	height uint64
+}
+
 type acct struct {
 	balance uint64
 	nonce   uint64
+	pending []pending
 }
 
 // NewKey returns an ed25519 address and the private key that spends it.
@@ -113,7 +119,7 @@ func transferWire(body, sig []byte) []byte {
 	return out
 }
 
-func coinbaseTx(height, extra uint64, note string, miner [32]byte, fees uint64) Tx {
+func coinbaseTx(height, extra uint64, note string, miner [32]byte, subsidy, fees uint64) Tx {
 	note = trimNote(note)
 	tx := Tx{
 		Kind:   kindCoinbase,
@@ -121,7 +127,7 @@ func coinbaseTx(height, extra uint64, note string, miner [32]byte, fees uint64) 
 		Extra:  extra,
 		Note:   note,
 		Pubkey: miner,
-		Amount: Subsidy,
+		Amount: subsidy,
 		Fee:    fees,
 	}
 	tx.ID = txid(coinbaseBytes(tx))
@@ -209,7 +215,8 @@ func applyBlock(prior map[[32]byte]acct, block Block) (map[[32]byte]acct, error)
 		return nil, errors.New("chain: coinbase")
 	}
 	cb := block.Txs[0]
-	if cb.Amount != Subsidy || cb.Height != block.Height || cb.Note != block.Note || cb.Extra != block.ExtraNonce {
+	subsidy := SubsidyAt(block.Height)
+	if cb.Amount != subsidy || cb.Height != block.Height || cb.Note != block.Note || cb.Extra != block.ExtraNonce {
 		return nil, errors.New("chain: coinbase fields")
 	}
 	if cb.ID != txid(coinbaseBytes(cb)) {
@@ -219,6 +226,9 @@ func applyBlock(prior map[[32]byte]acct, block Block) (map[[32]byte]acct, error)
 		return nil, errors.New("chain: too many transfers")
 	}
 	state := cloneState(prior)
+	if err := matureState(state, block.Height); err != nil {
+		return nil, err
+	}
 	var fees uint64
 	seen := map[[32]byte]bool{cb.ID: true}
 	for _, tx := range block.Txs[1:] {
@@ -238,18 +248,39 @@ func applyBlock(prior map[[32]byte]acct, block Block) (map[[32]byte]acct, error)
 	if cb.Fee != fees {
 		return nil, errors.New("chain: fee total")
 	}
-	credit, overflow := add(Subsidy, fees)
+	credit, overflow := add(cb.Amount, fees)
 	if overflow {
 		return nil, errors.New("chain: subsidy overflow")
 	}
 	miner := state[cb.Pubkey]
-	next, overflow := add(miner.balance, credit)
-	if overflow {
-		return nil, errors.New("chain: balance overflow")
-	}
-	miner.balance = next
+	miner.pending = append(miner.pending, pending{amount: credit, height: block.Height})
 	state[cb.Pubkey] = miner
 	return state, nil
+}
+
+// matureState credits coinbases that have CoinbaseMaturity blocks above them.
+// A reward from height h is spendable in a block at height h+CoinbaseMaturity.
+func matureState(state map[[32]byte]acct, height uint64) error {
+	for key, acct := range state {
+		if len(acct.pending) == 0 {
+			continue
+		}
+		keep := make([]pending, 0, len(acct.pending))
+		for _, item := range acct.pending {
+			if height >= item.height+uint64(CoinbaseMaturity) {
+				next, overflow := add(acct.balance, item.amount)
+				if overflow {
+					return errors.New("chain: balance overflow")
+				}
+				acct.balance = next
+				continue
+			}
+			keep = append(keep, item)
+		}
+		acct.pending = keep
+		state[key] = acct
+	}
+	return nil
 }
 
 func selectTransfers(prior map[[32]byte]acct, mem []Tx, limit int) []Tx {
@@ -285,6 +316,9 @@ func selectTransfers(prior map[[32]byte]acct, mem []Tx, limit int) []Tx {
 func cloneState(in map[[32]byte]acct) map[[32]byte]acct {
 	out := make(map[[32]byte]acct, len(in))
 	for k, v := range in {
+		if len(v.pending) > 0 {
+			v.pending = append([]pending(nil), v.pending...)
+		}
 		out[k] = v
 	}
 	return out
